@@ -1,6 +1,7 @@
 package info.sigmaproject.musictravlr;
 
 import android.Manifest;
+import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -8,13 +9,19 @@ import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
 import android.support.v7.app.AlertDialog;
+import android.util.Log;
 
+import com.firebase.client.DataSnapshot;
 import com.firebase.client.Firebase;
+import com.firebase.client.FirebaseError;
+import com.firebase.client.ValueEventListener;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
@@ -36,10 +43,11 @@ public class MapsActivity extends FragmentActivity implements
     public static String SC_CLIENT_ID = "f0bcbacd3c99e2447ecfa68bad107651";
 
     private GoogleMap map;
-    private Firebase firebase;
+    private Firebase rootRef;
     private LocationManager locationManager;
     private int SELECT_TRACK_REQUEST = 2;
     private int PERMISSION_REQUEST = 3;
+    private ProgressDialog globalProgressDialog;
 
     private Map<LatLng, List<Track>> tracks = new HashMap<>();
 
@@ -47,13 +55,20 @@ public class MapsActivity extends FragmentActivity implements
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_maps);
-        // Obtain the SupportMapFragment and get notified when the map is ready to be used.
-        SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
-                .findFragmentById(R.id.map);
-        mapFragment.getMapAsync(this);
+        final MapsActivity self = this;
 
-        Firebase.setAndroidContext(this);
-        firebase = new Firebase("https://glowing-inferno-1872.firebaseio.com/");
+        if (!isNetworkAvailable()) {
+            AlertDialog dialog = new AlertDialog.Builder(this)
+                    .setMessage("This app requires internet connection.")
+                    .setNegativeButton("Close", new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            self.finish();
+                        }
+                    }).create();
+            dialog.show();
+            return;
+        }
 
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -67,6 +82,16 @@ public class MapsActivity extends FragmentActivity implements
             // for ActivityCompat#requestPermissions for more details.
             return;
         }
+        globalProgressDialog = ProgressDialog.show(this, "Loading...",
+                "Obtaining tracks. Please wait...", true, false);
+        // Obtain the SupportMapFragment and get notified when the map is ready to be used.
+        SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
+                .findFragmentById(R.id.map);
+        mapFragment.getMapAsync(this);
+
+        Firebase.setAndroidContext(this);
+        rootRef = new Firebase("https://glowing-inferno-1872.firebaseio.com/android/music-travlr");
+
         locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 50000, 5, this);
         locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 50000, 5, this);
     }
@@ -83,17 +108,38 @@ public class MapsActivity extends FragmentActivity implements
      */
     @Override
     public void onMapReady(GoogleMap googleMap) {
-        final MapsActivity self = this;
         map = googleMap;
-
-        // Add a marker in Sydney and move the camera
-        LatLng sydney = new LatLng(-34, 151);
-//        MarkerOptions sydneyMarker = new MarkerOptions().position(sydney).title("Marker in Sydney");
-//        map.addMarker(sydneyMarker);
-//        map.moveCamera(CameraUpdateFactory.newLatLngZoom(sydney, 15f));
         map.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(0, 0), 5f));
         map.setOnMapLongClickListener(this);
         map.setOnMarkerClickListener(this);
+
+        rootRef.child("markers").addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot dataSnapshot) {
+                // loop through all markers
+                for (DataSnapshot markerSnapshot : dataSnapshot.getChildren()) {
+                    LatLng position = firebaseRefToLatLng(markerSnapshot.getKey());
+                    List<Track> tracks = MapsActivity.this.tracks.get(position);
+                    if (tracks == null) {
+                        tracks = new ArrayList<>();
+                    }
+
+                    for (DataSnapshot trackSnapshot : markerSnapshot.child("tracks").getChildren()) {
+                        Track track = trackSnapshot.getValue(Track.class);
+                        tracks.add(track);
+                    }
+
+                    MapsActivity.this.tracks.put(position, tracks);
+                    map.addMarker(new MarkerOptions().position(position).title("Listen here!"));
+                }
+                globalProgressDialog.dismiss();
+            }
+
+            @Override
+            public void onCancelled(FirebaseError firebaseError) {
+
+            }
+        });
     }
 
     @Override
@@ -122,6 +168,8 @@ public class MapsActivity extends FragmentActivity implements
             this.tracks.put(position, tracks);
 
             map.addMarker(new MarkerOptions().position(position).title("Listen here!"));
+            rootRef.child("markers").child(latLngToFirebaseKey(position)).child("tracks").child(track.getId().toString()).setValue(track);
+            showTracksDialogAtPosition(position);
         }
     }
 
@@ -133,10 +181,9 @@ public class MapsActivity extends FragmentActivity implements
         startActivityForResult(selectTrackIntent, SELECT_TRACK_REQUEST);
     }
 
-    @Override
-    public boolean onMarkerClick(final Marker marker) {
-        final List<Track> tracks = this.tracks.get(marker.getPosition());
-        String[] trackNames = new String[tracks.size() + 1];
+    public void showTracksDialogAtPosition(final LatLng position) {
+        final List<Track> tracks = this.tracks.get(position);
+        final String[] trackNames = new String[tracks.size() + 1];
         trackNames[0] = "Add new track here...";
         for (int i = 0; i < tracks.size(); i++) {
             // Add track names after
@@ -150,17 +197,25 @@ public class MapsActivity extends FragmentActivity implements
                     public void onClick(DialogInterface dialog, int which) {
                         if (which == 0) {
                             // Add new track
-                            onMapLongClick(marker.getPosition());
+                            onMapLongClick(position);
                             return;
                         }
                         // (which - 1) - because the first item is 'Add new track'
-                        Uri song = Uri.parse(tracks.get(which - 1).getStreamUrl() + "?client_id=" + SC_CLIENT_ID);
+                        Track track = tracks.get(which - 1);
+                        Uri song = Uri.parse(track.getStreamUrl() + "?client_id=" + SC_CLIENT_ID);
                         Intent musicIntent = new Intent(Intent.ACTION_VIEW);
                         musicIntent.setDataAndType(song, "audio/*");
+                        musicIntent.putExtra("name", track.getTitle());
+                        musicIntent.putExtra("title", track.getTitle());
                         startActivity(musicIntent);
                     }
                 });
         builder.create().show();
+    }
+
+    @Override
+    public boolean onMarkerClick(final Marker marker) {
+        showTracksDialogAtPosition(marker.getPosition());
         return true;
     }
 
@@ -190,5 +245,28 @@ public class MapsActivity extends FragmentActivity implements
             return;
         }
         locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
+    }
+
+    private boolean isNetworkAvailable() {
+        ConnectivityManager connectivityManager
+                = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        NetworkInfo activeNetworkInfo = connectivityManager.getActiveNetworkInfo();
+        return activeNetworkInfo != null;
+    }
+
+    private LatLng firebaseRefToLatLng(String firebaseKey) {
+        Log.d("FIREBASE", firebaseKey);
+        if (!firebaseKey.contains("lat") || !firebaseKey.contains("lng")) {
+            return null;
+        }
+        String sLat = firebaseKey.substring(4, firebaseKey.indexOf('|')).replace(',', '.');
+        String sLng = firebaseKey.substring(firebaseKey.indexOf('|') + 5, firebaseKey.length()).replace(',', '.');
+        return new LatLng(Double.parseDouble(sLat), Double.parseDouble(sLng));
+    }
+
+    private String latLngToFirebaseKey(LatLng latLng) {
+        String result = ("lat:" + latLng.latitude + "|lng:" + latLng.longitude).replaceAll("\\.", ",");
+        return result;
+//        return latLng.toString().replaceAll("([\\.#\\$\\[\\]])", "_");
     }
 }

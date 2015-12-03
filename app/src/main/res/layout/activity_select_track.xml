@@ -9,7 +9,25 @@
     android:paddingTop="@dimen/activity_vertical_margin"
     tools:context="info.sigmaproject.musictravlr.SelectTrackActivity">
 
+    <LinearLayout
+        android:id="@+id/l1"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+        <EditText
+            android:id="@+id/search_edit"
+            android:layout_weight="0.75"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content" />
+        <Button
+            android:onClick="onSearchButtonClick"
+            android:layout_weight="0.25"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:text="Search"/>
+    </LinearLayout>
+
     <ListView
+        android:layout_below="@id/l1"
         android:id="@+id/search_tracks_list"
         android:layout_width="match_parent"
         android:layout_height="match_parent">

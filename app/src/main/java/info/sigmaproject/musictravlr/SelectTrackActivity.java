@@ -1,5 +1,6 @@
 package info.sigmaproject.musictravlr;
 
+import android.app.ProgressDialog;
 import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -8,6 +9,7 @@ import android.util.Log;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.EditText;
 import android.widget.ListView;
 import android.widget.Toast;
 
@@ -20,6 +22,7 @@ import info.sigmaproject.musictravlr.data.Track;
 public class SelectTrackActivity extends AppCompatActivity implements AdapterView.OnItemClickListener {
 
     private ListView mSearchTrackList;
+    private EditText mSearchEdit;
     private SelectTrackActivity self;
     private Track selectedTrack;
 
@@ -37,10 +40,8 @@ public class SelectTrackActivity extends AppCompatActivity implements AdapterVie
 
         mSearchTrackList = (ListView) findViewById(R.id.search_tracks_list);
         mSearchTrackList.setOnItemClickListener(this);
+        mSearchEdit = (EditText) findViewById(R.id.search_edit);
         self = this;
-
-        // TODO: add search bar
-        new SearchSongsTask().execute();
     }
 
     @Override
@@ -71,19 +72,40 @@ public class SelectTrackActivity extends AppCompatActivity implements AdapterVie
         finish();
     }
 
+    public void onSearchButtonClick(View view) {
+        String search = mSearchEdit.getText().toString();
+        new SearchSongsTask().execute(search);
+    }
+
     class SearchSongsTask extends AsyncTask<String, Void, Track[]> {
+
+        private ProgressDialog progressDialog;
+
+        @Override
+        protected void onPreExecute() {
+            progressDialog = ProgressDialog.show(SelectTrackActivity.this, "Loading...",
+                    "Searching. Please wait...", true, false);
+        }
 
         @Override
         protected Track[] doInBackground(String... params) {
+            if (params.length == 0) {
+                Toast.makeText(self, "Please provide search query", Toast.LENGTH_SHORT).show();
+                return null;
+            }
             String searchUrl = "http://api.soundcloud.com/tracks?client_id={clientId}&q={query}";
             RestTemplate restTemplate = new RestTemplate();
             restTemplate.getMessageConverters().add(new MappingJackson2HttpMessageConverter());
             restTemplate.setRequestFactory(new HttpComponentsClientHttpRequestFactory());
-            return restTemplate.getForObject(searchUrl, Track[].class, MapsActivity.SC_CLIENT_ID, "nanobii");
+            return restTemplate.getForObject(searchUrl, Track[].class, MapsActivity.SC_CLIENT_ID, params[0]);
         }
 
         @Override
         protected void onPostExecute(Track[] tracks) {
+            progressDialog.dismiss();
+            if (tracks == null) {
+                return;
+            }
             for (Track track : tracks) {
                 Log.d("TRACK", track.toString());
             }
